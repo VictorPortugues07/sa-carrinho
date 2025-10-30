@@ -2,10 +2,10 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 
-#define BUTTON_PIN 23  // GPIO23 pin connected to the button
-#define LED_PIN 26     // GPIO26 pin connected to the LED
-#define POT 33
-#define LED_PWM 17
+#define FRENTE 32  // GPIO23 pin connected to the button
+#define ESQUERDA 34    // GPIO26 pin connected to the LED
+#define DIREITA 35
+#define TRAS 33
 
 // Variables for JSON
 char mensagemJson[100];
@@ -22,7 +22,7 @@ const char* ssid = "senai";
 const char* password = "senai123";
 
 // Replace with your Wnology device credentials
-const char* deviceID = "690292cc672bc066e5e68079";
+const char* deviceID = "67e6da63952b442620da5101";
 const char* accessKey = "7feed72d-42bb-486e-8f23-1c0aba55d63d";
 const char* accessSecret = "265f3ed59f42ff6d277e8db7fc6bbe287840c8b654b61875b9399b9565212c69";
 
@@ -33,7 +33,7 @@ const int mqtt_port = 1883;
 unsigned long tempo;
 
 const char* topicoEnvia = "senai/equipe1/envia";
-const char* topicoRecebe = "senai/equipe1/recebe";
+const char* topicoRecebe = "senai/equipe1/recebe"; 
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -48,91 +48,82 @@ void setup() {
   setup_wifi();
   client.setServer(mqtt_server, mqtt_port);
   client.setCallback(callback);
-  pinMode(BUTTON_PIN, INPUT);
-  pinMode(LED_PIN, OUTPUT);
-  pinMode(LED_PWM, OUTPUT);
+  pinMode(FRENTE, OUTPUT);
+  pinMode(ESQUERDA, OUTPUT);
+  pinMode(DIREITA, OUTPUT);
+  pinMode(TRAS, OUTPUT);
 }
 
 void loop() {
-  if (!client.connected()) {
-    reconnect();
-  }
-
-  currentState = digitalRead(BUTTON_PIN);
-  StaticJsonDocument<300> msmJson;
-  msmJson["botao"] = currentState;
-  serializeJson(msmJson, mensagemJson);
-
-
-  StaticJsonDocument<300> potJson;
-  potJson["potenciometro"] = analogRead(POT);
-  serializeJson(potJson, mensagemPotJson);
-
+  if (!client.connected()) reconnect();
+  client.loop();
+  
   if ((millis() - tempo) > 6000) {
-    leituraPot = analogRead(POT);
-    Serial.println("Enviou o valor do potênciometro: " + String(leituraPot));
-    client.publish(topicoEnvia, mensagemPotJson);
+    // Cria um JSON com o status dos LEDs
+    StaticJsonDocument<256> dados;
+    dados["frente"] = analogRead(FRENTE);
+    dados["tras"] = analogRead(TRAS);
+    dados["esquerda"] = analogRead(ESQUERDA);
+    dados["direita"] = analogRead(DIREITA);
+
+    char mensagem[256];
+    serializeJson(dados, mensagem);
+
+    Serial.println("Publicando estados atuais dos LEDs:");
+    Serial.println(mensagem);
+
+    client.publish(topicoEnvia, mensagem);
+
     tempo = millis();
   }
-
-  if (lastState == LOW && currentState == HIGH) {
-    Serial.println("O botão está pressionado");
-    client.publish(topicoEnvia, mensagemJson);
-  } else if (lastState == HIGH && currentState == LOW) {
-    Serial.println("O botão foi solto");
-    client.publish(topicoEnvia, mensagemJson);
-  }
-
-  // Save the last state
-  lastState = currentState;
-  client.loop();
 }
 
 ///////////////////////////////////////////////////////////////
 // Function to handle incoming MQTT messages
 void callback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("Mensagem recebida [");
-  Serial.print(topic);
-  Serial.print("]: ");
+  Serial.print("Mensagem recebida em ");
+  Serial.println(topic);
 
-  char JSONMessage[length];
-  for (int i = 0; i < length; i++) {
-    JSONMessage[i] = (char)payload[i];
-  }
-  Serial.println("Parsing start: ");
-  Serial.println(JSONMessage);
-  StaticJsonDocument<300> JSONBuffer;
-  deserializeJson(JSONBuffer, JSONMessage);
-
-  DeserializationError error = deserializeJson(JSONBuffer, JSONMessage);
-
-  if (error) {
-    Serial.print(F("deserializeJson() failed: "));
-    Serial.println(error.f_str());
-  }
-
-  const char* variable = JSONBuffer["variable"];
-  int value = JSONBuffer["value"];
-
-  Serial.print("variavel: ");
-  Serial.println(variable);
-  Serial.print("Valor: ");
-  Serial.println(value);
-  Serial.println();
-
-  if (String(topic) == topicoRecebe) {
-    digitalWrite(LED_PIN, value);
-  }
-  if (String(topic) == "esp32/LED") {
-    analogWrite(LED_PWM, map(value, 0, 100, 0, 255));
-    Serial.println("Comando LED: " + String(map(value, 0, 100, 0, 255)));
-  }
-
-  // Print the payload as a string
+  String msg = "";
   for (unsigned int i = 0; i < length; i++) {
-    Serial.print((char)payload[i]);
+    msg += (char)payload[i];
   }
-  Serial.println();
+
+  Serial.println("Payload recebido: " + msg);
+
+  StaticJsonDocument<256> doc;
+  DeserializationError error = deserializeJson(doc, msg);
+  if (error) {
+    Serial.print("Erro ao decodificar JSON: ");
+    Serial.println(error.f_str());
+    return;
+  }
+
+  const char* variable = doc["variable"];
+  int value = doc["value"];
+
+  Serial.print("Comando recebido -> Variável: ");
+  Serial.print(variable);
+  Serial.print(" | Valor: ");
+  Serial.println(value);
+
+  // Converte o valor (0–100) para PWM (0–255)
+  int pwmValue = map(value, 0, 100, 0, 255);
+
+  // Decide qual LED ajustar
+  if (strcmp(variable, "frente") == 0) {
+    analogWrite(FRENTE, pwmValue);
+  } else if (strcmp(variable, "tras") == 0) {
+    analogWrite(TRAS, pwmValue);
+  } else if (strcmp(variable, "direita") == 0) {
+    analogWrite(DIREITA, pwmValue);
+  } else if (strcmp(variable, "esquerda") == 0) {
+    analogWrite(ESQUERDA, pwmValue);
+  } else {
+    Serial.println("Variável desconhecida recebida!");
+  }
+
+  Serial.println("PWM ajustado para: " + String(pwmValue));
 }
 
 // Function to connect to Wi-Fi
